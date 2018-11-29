@@ -1,0 +1,227 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Create a VPC for Lambda functions to execute in. Functions are based in the private subnets and can reach the Internet via NAT."
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/22
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: "lambda-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  IGAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: "lambda-vpc-route-table"
+
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+    
+
+# Subnets - 4 total. 2 public in 2 AZs, 2 private in 2 AZs.
+
+  #Subnet A - Public
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: ""
+      CidrBlock: "10.0.0.0/26"
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: "lambda-vpc-public-a"
+
+  PublicSubnetARoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref RouteTable
+
+  # Subnet B - Public
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ""
+      CidrBlock: "10.0.1.0/26"
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name 
+          Value: "lambda-vpc-public-b"
+
+  PublicSubnetBRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref RouteTable
+  
+  #Subnet C - Private
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0 
+          - Fn::GetAZs: ""
+      CidrBlock: "10.0.2.0/26"
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref VPC
+      Tags: 
+        - Key: Name
+          Value: "lambda-vpc-private-c"
+
+  PrivateSubnetCRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetC
+      RouteTableId: !Ref LambdaRouteTable
+
+  #Subnet D- Private
+  PrivateSubnetD:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ""
+      CidrBlock: "10.0.3.0/26"
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref VPC
+      Tags: 
+        - Key: Name
+          Value: "lambda-vpc-private-d"
+
+  PrivateSubnetDRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetD
+      RouteTableId: !Ref LambdaRouteTable
+
+#NAT Gateway for Lambda to talk to internet
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: "eipalloc-25567b0b"
+      SubnetId: !Ref PublicSubnetA
+
+  LambdaRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  LambdaInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NATGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref NATGateway
+      RouteTableId: !Ref LamdaRouteTable
+
+# Security Groups
+  # Groups
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: "SG for Lambda function"
+      VpcId: !Ref VPC
+
+  LambdaRdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Let RDS take inbound connections from Lambda"
+      VpcId: !Ref VPC
+  
+  #Rules
+  AllowSQLInbound:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      SourceSecurityGroupId: !Ref LambdaRdsSecurityGroup
+      FromPort: "3306"
+      ToPort: "3306"
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: "tcp"
+
+  AllowLambdaToDbtcp:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      FromPort: -1
+      ToPort: -1
+      GroupId: !Ref LambdaRdsSecurityGroup
+      Ipprotocol: "tcp"
+
+  AllowLambdaToDbUdp:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      FromPort: -1
+      ToPort: -1
+      GroupId: !Ref LambdaRdsSecurityGroup
+      Ipprotocol: "udp"
+
+Outputs:
+  VpcId: 
+    Value: !Ref VPC
+    Description: "ID of the VPC for the application"
+    Export:
+      Name: "lambda-vpc:vpc:id"
+
+  PublicSubnetA:
+    Value: !Ref PublicSubnetA
+    Description: "ID of the first pub subnet"
+    Export:
+      Name: "lambda-vpc:subnet:public:a"
+
+  PublicSubnetB:
+    Value: !Ref PublicSubnetB
+    Description: "ID of the second pub subnet"
+    Export:
+      Name: "lambda-vpc:subnet:public:b"
+
+  PrivateSubnetC:
+    Value: !Ref PrivateSubnetC
+    Description: "ID of the first priv subnet"
+    Export: 
+      Name: "lambda-vpc:subnet:private:c"
+
+  PrivateSubnetD:
+    Value: !Ref PrivateSubnetD
+    Description: "ID of the second priv subnet"
+    Export:
+      Name: "lambda-vpc:subnet:private:d"
+
+  LambdaSecurityGroup:
+    Value: !Ref LambdaSecurityGroup
+    Description: "security group for the lambda functions to sit in"
+    Export:
+      Name: "lambda-vpc:sg:lambda"
+

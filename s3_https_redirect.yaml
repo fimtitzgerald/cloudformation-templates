@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates an HTTPS redirect from one subdomain to another with static S3 and Cloudfront. 
+
+Parameters:
+    TargetDomainName:
+        Type: String
+        Description: Target domain to redirect to
+        Default: "new-subdomain.domain.com"
+    SourceDomainName:
+        Type: String
+        Description: Source domain name for redirect
+        Default: "old-subdomain.domain.com"
+
+Resources:
+    S3Bucket:
+        Type: AWS::S3::Bucket
+        Properties:
+            BucketName: "old-subdomain.domain.com"
+            #Accesscontrol: PublicRead
+            VersioningConfiguration:
+                Status: Enabled
+            WebsiteConfiguration:
+                RedirectAllRequestsTo:
+                    HostName: !Ref TargetDomainName
+                    Protocol: https
+
+    Cloudfront: 
+      Type: AWS::CloudFront::Distribution
+      Properties: 
+        DistributionConfig:
+            Origins: 
+            -   DomainName: !Select [2, !Split ["/", !GetAtt S3Bucket.WebsiteURL]]
+                Id: myS3Origin
+                CustomOriginConfig:
+                    OriginProtocolPolicy: http-only  
+            DefaultCacheBehavior: 
+                TargetOriginId: myS3Origin
+                DefaultTTL: 5
+                MaxTTL: 30
+                ForwardedValues:
+                    QueryString: false 
+                ViewerProtocolPolicy: redirect-to-https
+            Enabled: true            
+            Aliases:
+            - !Ref SourceDomainName
+            ViewerCertificate:
+                AcmCertificateArn: !ImportValue "project-exports:acm:certificate:arn"
+                SslSupportMethod: sni-only
+
+Outputs:
+  EndpointUrl:
+    Value: !GetAtt S3Bucket.WebsiteURL
+    Description: Endpoint URL of the S3 bucket
+    Export:
+      Name: "project-exports:s3:endpoint"
+
+  CloudfrontDomainName:
+    Value: !GetAtt Cloudfront.DomainName
+    Description: "Generated DNS name of the Cloufront Dist"
+    Export:
+      Name: "project-exports:cloudfront:dns:url"

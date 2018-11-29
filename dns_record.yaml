@@ -1,0 +1,30 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create a subdomain and point it at a Load Balancer"
+
+Parameters:
+  Domain:
+    Type: "String"
+    Description: "FQDN for the service"
+
+Resources:
+  # HostedZoneIDs of AWS services is from here:
+  # http://docs.aws.amazon.com/general/latest/gr/rande.html#elb_region
+  Route53Record:
+    Type: "AWS::Route53::RecordSet"
+    Properties:
+      AliasTarget:
+        DNSName: !ImportValue "project-exports:elb:dns-name"
+        HostedZoneId: "ZQSVJUPU6J1EY"     # ELB
+        EvaluateTargetHealth: true
+      Comment: "Creates a record for your subdomain/domain to your ELB"
+      HostedZoneId: "Z2NTRXWX3QUVZ6"
+      Name: !Ref Domain
+      Type: "A"
+
+Outputs:
+  FQDN:
+    Value: !Ref Domain
+    Description: "FQDN"
+    Export:
+      Name: "project-exports:route53:domain-name"

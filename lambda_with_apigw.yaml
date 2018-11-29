@@ -1,0 +1,149 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Deploy a Lambda function and API Gateway function/endpoint that interacts with Slack."
+
+Parameters:
+    AParameter:
+        Type: String
+        Description: "Channel ID"
+        NoEcho: true
+
+Resources:
+    LambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Handler: "function.handler"
+            MemorySize: 128
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Runtime: "python3.6"
+            Timeout: 3
+            Code:
+                S3Bucket: "an-s3-bucket"
+                S3Key: "an-s3-key/app.zip"
+            Environment:
+                Variables:
+                    AN_ENVIRONMENT_VARIABLE: !Ref AParameter
+
+    LambdaExecutionRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                - Effect: Allow
+                  Principal:
+                    Service:
+                    - lambda.amazonaws.com
+                Action:
+                - sts.AssumeRole
+            Path: "/"
+            Policies:
+            - PolicyName: root
+                PolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                - Effect: Allow
+                    Action:
+                    - logs:*
+                    Resource: arn:aws:logs:*:*:*
+
+
+    Api:
+        Type: "AWS::ApiGateway::RestApi"
+        Properties:
+            Name: "anon-bot-api"
+            Description: "API Endpoint to execute Lambda function"
+
+    ApiStage:
+        Type: "AWS::ApiGateway::Stage"
+        Properties:
+            DeploymentId: !Ref ApiDeployment
+            MethodSettings:
+                -   DataTraceEnabled: true
+                    HttpMethod: "POST"
+                    LoggingLevel: "INFO"
+                    ResourcePath: "/*"
+            RestApiId: !Ref Api
+            StageName: !Ref ApiDeployment
+
+    ApiDeployment:
+        Type: "AWS::ApiGateway::Deployment"
+        DependsOn: ["ApiPost"]
+        Properties:
+            RestApiId: !Ref Api
+            StageName: "prod"
+
+    ApiResource:
+        Type: "AWS::ApiGateway::Resource"
+        Properties:
+            RestApiId: !Ref Api
+            ParentId: !GetAtt Api.RootResourceId
+            PathPart: "anon-bot"
+
+    ApiPost:
+        Type: "AWS::ApiGateway::Method"
+        Properties:
+            AuthorizationType: None
+            HttpMethod: "POST"
+            ResourceId: !GetAtt Api.RootResourceId
+            RestApiId: !Ref Api
+            Integration:
+                Type: "AWS"
+                IntegrationHttpMethod: "POST"
+                Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+                RequestTemplates:
+                    # I know this is ugly but its the YAML export of the API from the console. A readable version is included in
+                    # in the repo in the file `template-mapping`
+                    application/x-www-form-urlencoded: "## convert HTML POST data or HTTP GET\
+                        \ query string to JSON\n \n## get the raw post data from the AWS built-in\
+                        \ variable and give it a nicer name\n#if ($context.httpMethod == \"POST\"\
+                        )\n #set($rawAPIData = $input.path(\"$\"))\n#elseif ($context.httpMethod\
+                        \ == \"GET\")\n #set($rawAPIData = $input.params().querystring)\n #set($rawAPIData\
+                        \ = $rawAPIData.toString())\n #set($rawAPIDataLength = $rawAPIData.length()\
+                        \ - 1)\n #set($rawAPIData = $rawAPIData.substring(1, $rawAPIDataLength))\n\
+                        \ #set($rawAPIData = $rawAPIData.replace(\", \", \"&\"))\n#else\n #set($rawAPIData\
+                        \ = \"\")\n#end\n \n## first we get the number of \"&\" in the string,\
+                        \ this tells us if there is more than one key value pair\n#set($countAmpersands\
+                        \ = $rawAPIData.length() - $rawAPIData.replace(\"&\", \"\").length())\n\
+                        \ \n## if there are no \"&\" at all then we have only one key value pair.\n\
+                        ## we append an ampersand to the string so that we can tokenise it the\
+                        \ same way as multiple kv pairs.\n## the \"empty\" kv pair to the right\
+                        \ of the ampersand will be ignored anyway.\n#if ($countAmpersands == 0)\n\
+                        \ #set($rawPostData = $rawAPIData + \"&\")\n#end\n \n## now we tokenise\
+                        \ using the ampersand(s)\n#set($tokenisedAmpersand = $rawAPIData.split(\"\
+                        &\"))\n \n## we set up a variable to hold the valid key value pairs\n\
+                        #set($tokenisedEquals = [])\n \n## now we set up a loop to find the valid\
+                        \ key value pairs, which must contain only one \"=\"\n#foreach( $kvPair\
+                        \ in $tokenisedAmpersand )\n #set($countEquals = $kvPair.length() - $kvPair.replace(\"\
+                        =\", \"\").length())\n #if ($countEquals == 1)\n  #set($kvTokenised =\
+                        \ $kvPair.split(\"=\"))\n  #if ($kvTokenised[0].length() > 0)\n   ## we\
+                        \ found a valid key value pair. add it to the list.\n   #set($devNull\
+                        \ = $tokenisedEquals.add($kvPair))\n  #end\n #end\n#end\n \n## next we\
+                        \ set up our loop inside the output structure \"{\" and \"}\"\n{\n#foreach(\
+                        \ $kvPair in $tokenisedEquals )\n  ## finally we output the JSON for this\
+                        \ pair and append a comma if this isn't the last pair\n  #set($kvTokenised\
+                        \ = $kvPair.split(\"=\"))\n \"$util.urlDecode($kvTokenised[0])\" : #if($kvTokenised[1].length()\
+                        \ > 0)\"$util.urlDecode($kvTokenised[1])\"#{else}\"\"#end#if( $foreach.hasNext\
+                        \ ),#end\n#end\n}"
+                    IntegrationResponses:
+                    -   StatusCode: 200
+                        ResponseTemplates: 
+                            application/json: ""
+            
+                PassthroughBehavior: WHEN_NO_TEMPLATES
+            MethodResponses:
+                -   StatusCode: 200
+
+    InvokePermission:
+        Type: "AWS::Lambda::Permission"
+        DependsOn: "LambdaFunction"
+        Properties:
+            FunctionName: !Ref LambdaFunction
+            Action: "lambda:InvokeFunction"
+            Principal: "apigateway.amazonaws.com"
+            SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/
+
+Outputs:
+    RootExecuteURL:
+        Description: "HTTP POST Execute URL"
+        Value: !Sub “https://${Api}.execute-api.${AWS::Region}.amazonaws.com”

@@ -1,0 +1,22 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Provision an SSL cert via AWS ACM and export for use in another stack."
+
+
+Parameters:
+  Domain:
+    Type: "String"
+    Description: "FQDN for the service"
+
+Resources:
+  AcmCertificate:
+    Type: "AWS::CertificateManager::Certificate"
+    Properties:
+      DomainName: !Ref Domain
+
+Outputs:
+  AcmCertificateArn:
+    Value: !Ref AcmCertificate
+    Description: "ARN of the ACM (SSL) Cert"
+    Export:
+      Name: "project-exports:acm:certificate:arn"
